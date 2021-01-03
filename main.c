@@ -41,6 +41,8 @@ int main() {
        -1.0f,-1.0f, 1.0f, 0.0f, 0.0f,
     };
     // clang-format on
+    
+    // Setup fullscreen rect
 
     GLuint VBO;
     glCreateBuffers(1, &VBO);
@@ -54,6 +56,8 @@ int main() {
     glEnableVertexArrayAttrib(VAO, 1);
     glVertexArrayAttribBinding(VAO, 1, 0);
     glVertexArrayAttribFormat(VAO, 1, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 2);
+
+    // Setup shaders
 
     char const* vertexShaderSource =
         "#version 460 core\n"
@@ -90,17 +94,24 @@ int main() {
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
 
+    // Create PBO
+    // Longer queue size helps avoid stalls at the cost of higher memory usage and latency
+
     const unsigned queueSize = 4;
     unsigned drawI = 0;
+
+    GLuint PBO = 0;
+    glCreateBuffers(1, &PBO);
+    const unsigned subbufferSize = viewportW * viewportH * 4 * sizeof(GLubyte);
+    glNamedBufferStorage(PBO, subbufferSize * queueSize, NULL, 0);
+
+    // Create render texture array
 
     GLuint drawColorTextureArray = 0;
     glCreateTextures(GL_TEXTURE_2D_ARRAY, 1, &drawColorTextureArray);
     glTextureStorage3D(drawColorTextureArray, 1, GL_RGBA8, viewportW, viewportH, queueSize);
 
-    GLuint readColorBuffer = 0;
-    glCreateBuffers(1, &readColorBuffer);
-    const unsigned subbufferSize = viewportW * viewportH * 4 * sizeof(GLubyte);
-    glNamedBufferStorage(readColorBuffer, subbufferSize * queueSize, NULL, 0);
+    // Create FBO
 
     GLuint drawFramebuffer;
     glCreateFramebuffers(1, &drawFramebuffer);
@@ -120,21 +131,24 @@ int main() {
         glBindVertexArray(VAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
+        // Synchronous version -- will cause stalls
 #if 0
         GLubyte* buffer = malloc(subbufferSize);
         assert(buffer);
         glReadnPixels(0, 0, viewportW, viewportH, GL_RGBA, GL_UNSIGNED_BYTE, subbufferSize, buffer);
         free(buffer);
 #endif
+        // Asynchronous version -- does not cause stalls
 #if 0
         const unsigned copyOffset = subbufferSize * drawI;
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, readColorBuffer);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, PBO);
         glReadnPixels(0, 0, viewportW, viewportH, GL_RGBA, GL_UNSIGNED_BYTE, subbufferSize, copyOffset);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 #endif
+        // Asynchronous version -- performance issues (???)
 #if 1
         const unsigned copyOffset = subbufferSize * drawI;
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, readColorBuffer);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, PBO);
         glGetTextureSubImage(drawColorTextureArray, 0, 0, 0, drawI, viewportW, viewportH, 1, GL_BGRA, GL_UNSIGNED_BYTE, subbufferSize, copyOffset);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 #endif
@@ -151,7 +165,7 @@ int main() {
     glDeleteProgram(drawProgram);
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
-    glDeleteBuffers(1, &readColorBuffer);
+    glDeleteBuffers(1, &PBO);
     glDeleteTextures(1, &drawColorTextureArray);
     glDeleteFramebuffers(1, &drawFramebuffer);
 
