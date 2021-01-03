@@ -138,6 +138,13 @@ int main() {
         glReadnPixels(0, 0, viewportW, viewportH, GL_RGBA, GL_UNSIGNED_BYTE, subbufferSize, buffer);
         free(buffer);
 #endif
+        // Synchronous version -- will cause stalls
+#if 0
+        GLubyte* buffer = malloc(subbufferSize);
+        assert(buffer);
+        glGetTextureSubImage(drawColorTextureArray, 0, 0, 0, drawI, viewportW, viewportH, 1, GL_BGRA, GL_UNSIGNED_BYTE, subbufferSize, buffer);
+        free(buffer);
+#endif
         // Asynchronous version -- does not cause stalls
 #if 0
         const unsigned copyOffset = subbufferSize * drawI;
