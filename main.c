@@ -12,9 +12,13 @@ void debugFunction(GLenum source, GLenum type, GLuint id, GLenum severity, GLsiz
     }
 }
 
+enum {
+    queueSize = 4,
+};
+
 int main() {
-    unsigned viewportW = 1280;
-    unsigned viewportH = 720;
+    size_t viewportW = 1280;
+    size_t viewportH = 720;
 
     glfwInit();
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
@@ -97,28 +101,35 @@ int main() {
     // Create PBO
     // Longer queue size helps avoid stalls at the cost of higher memory usage and latency
 
-    const unsigned queueSize = 4;
-    unsigned drawI = 0;
+    size_t drawI = 0;
 
-    GLuint PBO = 0;
-    glCreateBuffers(1, &PBO);
-    const unsigned subbufferSize = viewportW * viewportH * 4 * sizeof(GLubyte);
-    glNamedBufferStorage(PBO, subbufferSize * queueSize, NULL, 0);
+    GLuint PBOs[queueSize];
+    glGenBuffers(queueSize, PBOs);
+    const size_t bufferSize = viewportW * viewportH * 4 * sizeof(GLubyte);
+    for (size_t i = 0; i < queueSize; i++) {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, PBOs[i]);
+        glBufferData(GL_PIXEL_PACK_BUFFER, bufferSize, NULL, GL_DYNAMIC_READ);
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 
     // Create render texture array
 
-    GLuint drawColorTextureArray = 0;
-    glCreateTextures(GL_TEXTURE_2D_ARRAY, 1, &drawColorTextureArray);
-    glTextureStorage3D(drawColorTextureArray, 1, GL_RGBA8, viewportW, viewportH, queueSize);
+    GLuint drawColorTextures[queueSize];
+    glCreateTextures(GL_TEXTURE_2D, queueSize, drawColorTextures);
+    for (size_t i = 0; i < queueSize; i++) {
+        glTextureStorage2D(drawColorTextures[i], 1, GL_RGBA8, viewportW, viewportH);
+    }
 
     // Create FBO
 
     GLuint drawFramebuffer;
     glCreateFramebuffers(1, &drawFramebuffer);
-    for (unsigned i = 0; i < queueSize; i++) {
-        glNamedFramebufferTextureLayer(drawFramebuffer, GL_COLOR_ATTACHMENT0 + i, drawColorTextureArray, 0, i);
+    for (size_t i = 0; i < queueSize; i++) {
+        glNamedFramebufferTexture(drawFramebuffer, GL_COLOR_ATTACHMENT0 + i, drawColorTextures[i], 0);
     }
 
+    GLubyte* buffer = malloc(bufferSize);
+    assert(buffer);
     while (!glfwWindowShouldClose(window)) {
         glBindFramebuffer(GL_FRAMEBUFFER, drawFramebuffer);
         glDrawBuffer(GL_COLOR_ATTACHMENT0 + drawI);
@@ -133,30 +144,26 @@ int main() {
 
         // Synchronous version -- will cause stalls
 #if 0
-        GLubyte* buffer = malloc(subbufferSize);
-        assert(buffer);
         glReadnPixels(0, 0, viewportW, viewportH, GL_RGBA, GL_UNSIGNED_BYTE, subbufferSize, buffer);
-        free(buffer);
 #endif
         // Synchronous version -- will cause stalls
 #if 0
-        GLubyte* buffer = malloc(subbufferSize);
-        assert(buffer);
-        glGetTextureSubImage(drawColorTextureArray, 0, 0, 0, drawI, viewportW, viewportH, 1, GL_BGRA, GL_UNSIGNED_BYTE, subbufferSize, buffer);
-        free(buffer);
+        glBindTexture(GL_TEXTURE_2D, drawColorTextures[drawI]);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_BGRA, GL_UNSIGNED_BYTE, buffer);
+        glBindTexture(GL_TEXTURE_2D, 0);
 #endif
         // Asynchronous version -- does not cause stalls
 #if 0
-        const unsigned copyOffset = subbufferSize * drawI;
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, PBO);
-        glReadnPixels(0, 0, viewportW, viewportH, GL_RGBA, GL_UNSIGNED_BYTE, subbufferSize, copyOffset);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, PBOs[drawI]);
+        glReadnPixels(0, 0, viewportW, viewportH, GL_RGBA, GL_UNSIGNED_BYTE, subbufferSize, 0);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 #endif
         // Asynchronous version -- performance issues (???)
 #if 1
-        const unsigned copyOffset = subbufferSize * drawI;
-        glBindBuffer(GL_PIXEL_PACK_BUFFER, PBO);
-        glGetTextureSubImage(drawColorTextureArray, 0, 0, 0, drawI, viewportW, viewportH, 1, GL_BGRA, GL_UNSIGNED_BYTE, subbufferSize, copyOffset);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, PBOs[drawI]);
+        glBindTexture(GL_TEXTURE_2D, drawColorTextures[drawI]);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
         glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
 #endif
 
@@ -168,12 +175,13 @@ int main() {
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
+    free(buffer);
 
     glDeleteProgram(drawProgram);
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
-    glDeleteBuffers(1, &PBO);
-    glDeleteTextures(1, &drawColorTextureArray);
+    glDeleteBuffers(queueSize, PBOs);
+    glDeleteTextures(queueSize, drawColorTextures);
     glDeleteFramebuffers(1, &drawFramebuffer);
 
     glfwDestroyWindow(window);
